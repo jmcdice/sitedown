@@ -10,6 +10,10 @@ A Python tool that converts entire websites into a single Markdown file by crawl
 - Handles only internal links to maintain scope
 - Gracefully manages errors from inaccessible URLs
 
+<p align="center">
+<img src="images/sitedown.png" alt="SiteDown" width="500">
+</p>
+
 ## Installation
 
 Requires Python 3.6+
