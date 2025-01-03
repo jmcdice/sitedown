@@ -15,6 +15,8 @@ A Python tool that converts entire websites into a single Markdown file by crawl
 Requires Python 3.6+
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install requests beautifulsoup4 html2text
 ```
 
