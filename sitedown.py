@@ -31,9 +31,80 @@ def is_in_subpath(link, start_path):
         return True
     return parsed_link_path.startswith(start_path)
 
-def crawl_website(start_url):
+def is_excluded(link, exclude_paths):
+    """
+    Check if the link's path contains any of the excluded paths (case-insensitive).
+    """
+    parsed_link_path = get_path(link).lower()
+    for exclude in exclude_paths:
+        if exclude.lower() in parsed_link_path:
+            return True
+    return False
+
+def list_paths(start_url):
+    """
+    Crawl the website starting at start_url and collect all full URLs found.
+    Returns a list of full URLs (with possible duplicates), excluding any fragment-only links.
+    """
+    domain = get_domain(start_url)
+    start_path = get_path(start_url)
+
+    to_visit = [start_url]
+    visited = set()
+    urls_found = []
+
+    while to_visit:
+        current_url = to_visit.pop()
+        # Normalize current_url by stripping fragments
+        parsed_current = urlparse(current_url)
+        normalized_current_url = parsed_current._replace(fragment='').geturl()
+
+        if normalized_current_url in visited:
+            continue
+        visited.add(normalized_current_url)
+
+        # Fetch HTML
+        print(f"Crawling: {normalized_current_url}")
+        try:
+            response = requests.get(normalized_current_url, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            print(f"Failed to retrieve {normalized_current_url}: {e}")
+            continue
+
+        # Collect the normalized URL
+        urls_found.append(normalized_current_url)
+
+        # Parse HTML and extract links
+        soup = BeautifulSoup(response.text, "html.parser")
+        for link_tag in soup.find_all("a", href=True):
+            href = link_tag["href"]
+            # Skip links that are only fragments
+            if href.startswith('#'):
+                continue
+
+            link_url = urljoin(normalized_current_url, href)
+            parsed_link = urlparse(link_url)
+
+            # Skip URLs with fragments
+            if parsed_link.fragment:
+                continue
+
+            # Collect full URL without fragment
+            full_url = parsed_link._replace(fragment='').geturl()
+            urls_found.append(full_url)
+
+            if (is_internal_link(full_url, domain) and 
+                    full_url not in visited and 
+                    is_in_subpath(full_url, start_path)):
+                to_visit.append(full_url)
+
+    return urls_found
+
+def crawl_website(start_url, exclude_paths):
     """
     Crawl the website starting at start_url, restricted to the same domain/path.
+    Excludes any URLs containing paths in exclude_paths.
     Returns a dict of {url: text_content}.
     """
     domain = get_domain(start_url)
@@ -47,32 +118,51 @@ def crawl_website(start_url):
 
     while to_visit:
         current_url = to_visit.pop()
-        if current_url in visited:
+        # Normalize current_url by stripping fragments
+        parsed_current = urlparse(current_url)
+        normalized_current_url = parsed_current._replace(fragment='').geturl()
+
+        if normalized_current_url in visited:
             continue
-        visited.add(current_url)
+        visited.add(normalized_current_url)
 
         # Fetch HTML
-        print(f"Crawling: {current_url}")
+        print(f"Crawling: {normalized_current_url}")
         try:
-            response = requests.get(current_url, timeout=10)
+            response = requests.get(normalized_current_url, timeout=10)
             response.raise_for_status()
         except requests.RequestException as e:
-            print(f"Failed to retrieve {current_url}: {e}")
+            print(f"Failed to retrieve {normalized_current_url}: {e}")
             continue
 
         # Convert HTML → Markdown
         raw_html = response.text
         markdown_text = converter.handle(raw_html)
-        pages_content[current_url] = markdown_text
+        pages_content[normalized_current_url] = markdown_text
 
         # Extract links
         soup = BeautifulSoup(raw_html, "html.parser")
         for link_tag in soup.find_all("a", href=True):
-            link_url = urljoin(current_url, link_tag["href"])
-            if (is_internal_link(link_url, domain) and 
-                    link_url not in visited and 
-                    is_in_subpath(link_url, start_path)):
-                to_visit.append(link_url)
+            href = link_tag["href"]
+            # Skip links that are only fragments
+            if href.startswith('#'):
+                continue
+
+            link_url = urljoin(normalized_current_url, href)
+            parsed_link = urlparse(link_url)
+
+            # Skip URLs with fragments
+            if parsed_link.fragment:
+                continue
+
+            # Collect full URL without fragment
+            full_url = parsed_link._replace(fragment='').geturl()
+
+            if (is_internal_link(full_url, domain) and 
+                    full_url not in visited and 
+                    is_in_subpath(full_url, start_path) and
+                    not is_excluded(full_url, exclude_paths)):
+                to_visit.append(full_url)
 
     return pages_content
 
@@ -88,11 +178,27 @@ def main():
     parser = argparse.ArgumentParser(description="Crawl a website (restricted to a specific path) and save content to a markdown file.")
     parser.add_argument("url", help="The starting URL to crawl (e.g. https://example.com/quickstart)")
     parser.add_argument("-o", "--output", default="output.md", help="Output markdown file (default: output.md)")
+    parser.add_argument(
+        "-e", "--exclude",
+        nargs='*',
+        default=[],
+        help="Path(s) to exclude from crawling (e.g., /release-notes/ /admin/)"
+    )
+    parser.add_argument(
+        "-l", "--list-paths",
+        action='store_true',
+        help="List all paths found on the website without downloading."
+    )
     args = parser.parse_args()
 
-    pages_content = crawl_website(args.url)
-    write_markdown_file(pages_content, args.output)
-    print(f"All content saved to {args.output}")
+    if args.list_paths:
+        urls = list_paths(args.url)
+        for url in urls:
+            print(f"Crawling: {url}")
+    else:
+        pages_content = crawl_website(args.url, args.exclude)
+        write_markdown_file(pages_content, args.output)
+        print(f"All content saved to {args.output}")
 
 if __name__ == "__main__":
     main()
